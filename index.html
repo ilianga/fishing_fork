@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Fishing Fork</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #87CEFA; }
+    canvas {
+      display: block;
+      background-color: #1E90FF;
+      background-image: url('bg.png');
+      background-size: cover;
+      background-position: center center;
+      background-repeat: no-repeat;
+    }
+    #powerBarContainer {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      height: 20px;
+      border: 2px solid #fff;
+    }
+    #powerBar {
+      width: 0%;
+      height: 100%;
+      background: green;
+    }
+    #score {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #fff;
+      font: bold 24px sans-serif;
+      z-index: 10;
+    }
+    #timer {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      color: #fff;
+      font: bold 24px sans-serif;
+      z-index: 10;
+    }
+    #ranking {
+      display: none;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      font: 20px sans-serif;
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+      z-index: 10;
+    }
+    #startButton {
+      position: absolute;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      font: bold 24px sans-serif;
+      padding: 10px 20px;
+      background: #FFD700;
+      color: #000;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div id="powerBarContainer"><div id="powerBar"></div></div>
+  <div id="score">Score: 0</div>
+  <div id="timer">Time: 60</div>
+  <div id="ranking"></div>
+  <button id="startButton">Insert Coin</button>
+  <script>
+    // Audio e musica
+    const AudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playLaunchSound(power) {
+      const osc = AudioCtx.createOscillator();
+      const gain = AudioCtx.createGain();
+      osc.type = 'triangle';
+      const baseFreq = 150;
+      const maxFreq = 600;
+      const startFreq = baseFreq + (maxFreq - baseFreq) * power;
+      osc.frequency.setValueAtTime(startFreq, AudioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(startFreq * 2, AudioCtx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.3, AudioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, AudioCtx.currentTime + 0.2);
+      osc.connect(gain).connect(AudioCtx.destination);
+      osc.start();
+      osc.stop(AudioCtx.currentTime + 0.2);
+    }
+    function playHitFishSound() {
+      const osc = AudioCtx.createOscillator();
+      const gain = AudioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(400, AudioCtx.currentTime);
+      gain.gain.setValueAtTime(0.3, AudioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, AudioCtx.currentTime + 0.1);
+      osc.connect(gain).connect(AudioCtx.destination);
+      osc.start();
+      osc.stop(AudioCtx.currentTime + 0.1);
+    }
+    function playHitCoralSound() {
+      const osc = AudioCtx.createOscillator();
+      const gain = AudioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(200, AudioCtx.currentTime);
+      gain.gain.setValueAtTime(0.3, AudioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, AudioCtx.currentTime + 0.1);
+      osc.connect(gain).connect(AudioCtx.destination);
+      osc.start();
+      osc.stop(AudioCtx.currentTime + 0.1);
+    }
+    // Musica ambientale da file
+    const music = new Audio('music.mp3');
+    music.loop = true;
+    music.volume = 0.5;
+    let lastRemaining;
+    function speak(text) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      speechSynthesis.speak(utterance);
+    }
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    // enable pointer events for touch support
+    canvas.style.touchAction = 'none';
+    let width, height;
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const origin = { x: width / 2, y: height - 50 };
+    let stones = [];
+    let fishes = [];
+    let fishSpeed = 100; // px/s uniform per fish
+    let gameOver = false;
+    let canShoot = true;
+    const initialFishCount = 5;
+    
+let level = 1;
+const maxLevel = 50;
+const thresholdPoints = 50;
+let levelText = '';
+let levelTextTime = 0;
+const levelTextDuration = 2000;
+    
+    // preload immagini pesci e coralli
+    const fishImages = [];
+    for (let i = 1; i <= 10; i++) {
+      const img = new Image();
+      img.src = `fish${i}.png`;
+      fishImages.push(img);
+    }
+    // coral gif sources
+    const coralSources = ['coral1.gif','coral2.gif','coral3.gif','coral4.gif','coral5.gif'];
+    // preload immagine della forchetta
+    const forkImage = new Image();
+    forkImage.src = 'fork.png';
+    
+    // coralli
+let corals = []; // each: {element: HTMLImageElement, radius: number}
+// floating score texts
+let floatingTexts = [];
+    const maxCharge = 2000; // ms
+    const maxSpeed = 600; // px/s
+    let charging = false, chargeStart = 0;
+    let mousePos = { x: origin.x, y: origin.y };
+
+    let score = 0;
+
+    const powerBar = document.getElementById('powerBar');
+    const scoreDiv = document.getElementById('score');
+    const timerDiv = document.getElementById('timer');
+    const rankingDiv = document.getElementById('ranking');
+    let startTime = Date.now();
+    let gameDuration = 60000; // 60 secondi
+    lastRemaining = gameDuration / 1000 + 1;
+
+    function spawnFish() {
+      const angle = Math.random() * Math.PI * 2;
+      const vx = Math.cos(angle) * fishSpeed;
+      const vy = Math.sin(angle) * fishSpeed;
+      // weighted selection: fish10 (index 9) slightly rarer, fish9 (index 8) next
+      const rnd = Math.random();
+      let i;
+      if (rnd < 0.10) {
+        i = 9;
+      } else if (rnd < 0.15) {
+        i = 8;
+      } else {
+        i = Math.floor(Math.random() * 8); // indices 0-7 equally likely
+      }
+      const pts = i === 9 ? 0 : i === 8 ? -1 : i === 7 ? 0 : i + 1;
+      const bonusTime = i === 7 ? 10 : 0;
+      const penaltyTime = i === 9 ? 5 : 0;
+      fishes.push({
+        x: Math.random() * (width - 60) + 30,
+        y: Math.random() * (height / 2 - 60) + 30,
+        vx: vx,
+        vy: vy,
+        image: fishImages[i],
+        radius: fishImages[i].width / 2,
+        points: pts,
+        bonusTime: bonusTime,
+        penaltyTime: penaltyTime,
+        spawnTime: Date.now(),
+      });
+    }
+
+    // posiziona inizialmente 5 coralli come <img> DOM elements
+    function spawnCoral() {
+      // choose random gif
+      const src = coralSources[Math.floor(Math.random()*coralSources.length)];
+      const imgEl = new Image();
+      imgEl.src = src;
+      imgEl.style.position = 'absolute';
+      // position and size after load
+      imgEl.onload = () => {
+        const w = imgEl.width;
+        const h = imgEl.height;
+        const x = Math.random()*(width - w) + w/2;
+        const y = Math.random()*(height/2 - h) + h/2;
+        imgEl.style.left = (x - w/2) + 'px';
+        imgEl.style.top = (y - h/2) + 'px';
+        imgEl.style.pointerEvents = 'none';
+        imgEl.style.zIndex = '1';
+        document.body.appendChild(imgEl);
+        corals.push({ x, y, radius: Math.max(w,h)/2, element: imgEl });
+      };
+    }
+
+    canvas.addEventListener('mousemove', e => {
+      const rect = canvas.getBoundingClientRect();
+      mousePos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    });
+    canvas.addEventListener('mousedown', () => {
+      charging = true;
+      chargeStart = Date.now();
+    });
+    canvas.addEventListener('mouseup', () => {
+      if (charging && canShoot) {
+        const chargeTime = Date.now() - chargeStart;
+        const power = Math.min(chargeTime, maxCharge) / maxCharge;
+        const speed = power * maxSpeed;
+        const angle = Math.atan2(mousePos.y - origin.y, mousePos.x - origin.x);
+        stones.push({
+          x: origin.x,
+          y: origin.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          radius: 8
+        });
+        playLaunchSound(power);
+        canShoot = false;
+        powerBar.style.background = 'red';
+        charging = false;
+        powerBar.style.width = '0%';
+        setTimeout(() => {
+          canShoot = true;
+          powerBar.style.background = 'green';
+        }, 1000);
+      }
+    });
+
+    // pointer events for mouse and touch
+    canvas.addEventListener('pointermove', e => {
+      const rect = canvas.getBoundingClientRect();
+      mousePos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    });
+    canvas.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      charging = true;
+      chargeStart = Date.now();
+    });
+    canvas.addEventListener('pointerup', e => {
+      e.preventDefault();
+      if (charging && canShoot) {
+        const chargeTime = Date.now() - chargeStart;
+        const power = Math.min(chargeTime, maxCharge) / maxCharge;
+        const speed = power * maxSpeed;
+        const angle = Math.atan2(mousePos.y - origin.y, mousePos.x - origin.x);
+        stones.push({
+          x: origin.x,
+          y: origin.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          radius: 8
+        });
+        playLaunchSound(power);
+        canShoot = false;
+        powerBar.style.background = 'red';
+        charging = false;
+        powerBar.style.width = '0%';
+        setTimeout(() => {
+          canShoot = true;
+          powerBar.style.background = 'green';
+        }, 1000);
+      }
+    });
+
+    function update(dt) {
+      // remove expired floating texts (older than 2s)
+      floatingTexts = floatingTexts.filter(ft => Date.now() - ft.time < 2000);
+      if (gameOver) return;
+      stones = stones.filter(s => s.x > 0 && s.x < width && s.y > 0 && s.y < height);
+      stones.forEach(s => {
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+      });
+
+      // collisione con coralli
+      corals.forEach((coral, ci) => {
+        stones.forEach((s, si) => {
+          const dx = s.x - coral.x;
+          const dy = s.y - coral.y;
+          if (Math.hypot(dx, dy) < s.radius + coral.radius) {
+            // show negative score text for coral
+            floatingTexts.push({ x: coral.x, y: coral.y, text: '-1', time: Date.now(), size: 24 });
+            score -= 1;
+            scoreDiv.textContent = 'Score: ' + score;
+            stones.splice(si, 1);
+            coral.element.remove();
+            corals.splice(ci, 1);
+            spawnCoral();
+            playHitCoralSound();
+          }
+        });
+      });
+
+      // remove fish9 and fish10 (negative points or penaltyTime>0) after 10 seconds on screen
+      const now = Date.now();
+      fishes = fishes.filter(fish => !((fish.points < 0 || fish.penaltyTime > 0) && now - fish.spawnTime > 10000));
+      // maintain constant number of fishes
+      while (fishes.length < initialFishCount + level - 1) {
+        spawnFish();
+      }
+
+      // aggiorna e gestisci collisioni con tutti i pesci
+      fishes.forEach((fish, i) => {
+        // random dodge: curva leggermente direzione per schivare
+        if (Math.random() < 0.2) {
+          const angle = Math.atan2(fish.vy, fish.vx) + (Math.random() * 14 - 7) * Math.PI / 180;
+          const speed = Math.hypot(fish.vx, fish.vy);
+          fish.vx = Math.cos(angle) * speed;
+          fish.vy = Math.sin(angle) * speed;
+        }
+        fish.x += fish.vx * dt;
+        fish.y += fish.vy * dt;
+        if (fish.x < fish.radius || fish.x > width - fish.radius) fish.vx *= -1;
+        if (fish.y < fish.radius || fish.y > height - fish.radius) fish.vy *= -1;
+        stones.forEach((s, si) => {
+          const dx = s.x - fish.x;
+          const dy = s.y - fish.y;
+          if (Math.hypot(dx, dy) < s.radius + fish.radius) {
+            // show floating text for bonus, penalty or score
+            if (fish.penaltyTime) {
+              const text = '-' + fish.penaltyTime + ' s';
+              floatingTexts.push({ x: fish.x, y: fish.y, text: text, time: Date.now(), size: 32 });
+              gameDuration = Math.max(0, gameDuration - fish.penaltyTime * 1000);
+            } else if (fish.bonusTime) {
+              const text = '+' + fish.bonusTime + ' s';
+              floatingTexts.push({ x: fish.x, y: fish.y, text: text, time: Date.now(), size: 32 });
+              gameDuration += fish.bonusTime * 1000;
+            } else if (fish.points !== 0) {
+              const text = fish.points > 0 ? '+' + fish.points : '' + fish.points;
+              floatingTexts.push({ x: fish.x, y: fish.y, text: text, time: Date.now(), size: 24 });
+              score += fish.points;
+              scoreDiv.textContent = 'Score: ' + score;
+            // threshold for exponential level up: base * level*(level+1)/2
+            const nextThreshold = thresholdPoints * (level * (level + 1) / 2);
+            if (score >= nextThreshold) {
+              nextLevel();
+            }
+            }
+            stones.splice(si, 1);
+            fishes.splice(i, 1);
+            spawnFish();
+            playHitFishSound();
+          }
+        });
+      });
+      // aggiorna timer
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, Math.ceil((gameDuration - elapsed) / 1000));
+      if (remaining <= 5 && remaining < lastRemaining && remaining > 0) {
+        speak(remaining.toString());
+      }
+      lastRemaining = remaining;
+      timerDiv.textContent = 'Time: ' + remaining;
+      if (elapsed >= gameDuration) {
+        gameOver = true;
+        endGame();
+      }
+
+      if (charging) {
+        const chargeTime = Date.now() - chargeStart;
+        const pct = Math.min(chargeTime, maxCharge) / maxCharge * 100;
+        powerBar.style.width = pct + '%';
+      }
+    }
+
+    function nextLevel() {
+      if (level >= maxLevel) return;
+      level++;
+      // reset timer duration to 60s
+      gameDuration = 60000;
+      // increase speed by 10%
+      fishSpeed *= 1.1;
+      // clear stones and fish
+      stones = [];
+      fishes = [];
+      // spawn fishes for new level
+      for (let i = 0; i < initialFishCount + level - 1; i++) spawnFish();
+      // aggiungi uno fish9 extra per questo livello
+      {
+        const angle9 = Math.random() * Math.PI * 2;
+        const vx9 = Math.cos(angle9) * fishSpeed;
+        const vy9 = Math.sin(angle9) * fishSpeed;
+        const x9 = Math.random() * (width - 60) + 30;
+        const y9 = Math.random() * (height / 2 - 60) + 30;
+        fishes.push({
+          x: x9,
+          y: y9,
+          vx: vx9,
+          vy: vy9,
+          image: fishImages[8],
+          radius: fishImages[8].width / 2,
+          points: -1,
+          bonusTime: 0,
+          spawnTime: Date.now(),
+        });
+      }
+      // reset timer
+      startTime = Date.now();
+      timerDiv.textContent = 'Time: ' + (gameDuration / 1000);
+      // reset remaining tracker
+      lastRemaining = gameDuration / 1000 + 1;
+      // show level text
+      levelText = 'Level ' + level;
+      levelTextTime = Date.now();
+    }
+
+    function endGame() {
+      music.pause();
+      music.currentTime = 0;
+      const name = prompt("Time's up! Enter your name:");
+      let ranking = JSON.parse(localStorage.getItem('ranking') || '[]');
+      ranking.push({ name, score });
+      ranking.sort((a, b) => b.score - a.score);
+      localStorage.setItem('ranking', JSON.stringify(ranking));
+      showRanking(ranking);
+      document.getElementById('startButton').style.display = 'block';
+    }
+    function showRanking(ranking) {
+      const lines = ranking.slice(0, 5).map((r, i) => '<p>' + (i+1) + '. ' + r.name + ' - ' + r.score + '</p>');
+      rankingDiv.innerHTML = '<h1><img src="fork.png" alt="Fork" style="vertical-align: middle; width:48px; height:48px; margin-right:8px;">Fishing Fork</h1><h2>Leaderboard</h2>' + lines.join('');
+      rankingDiv.style.display = 'block';
+    }
+
+    function startGame() {
+      score = 0;
+      scoreDiv.textContent = 'Score: 0';
+      gameOver = false;
+      stones = [];
+      fishes = [];
+      // Remove existing coral DOM elements and clear
+      corals.forEach(c => c.element.remove());
+      corals = [];
+      level = 1;
+      fishSpeed = 100; // reset to base speed
+      document.getElementById('score').textContent = 'Score: 0';
+      // spawn fishes based on level
+      for (let i = 0; i < initialFishCount + level - 1; i++) spawnFish();
+      for (let i = 0; i < 10; i++) spawnCoral();
+      // show starting level text
+      levelText = 'Level ' + level;
+      levelTextTime = Date.now();
+      startTime = Date.now();
+      timerDiv.textContent = 'Time: ' + (gameDuration / 1000);
+      lastRemaining = gameDuration / 1000 + 1;
+      rankingDiv.style.display = 'none';
+      document.getElementById('startButton').style.display = 'none';
+      last = performance.now();
+      music.currentTime = 0;
+      music.play();
+      requestAnimationFrame(loop);
+    }
+    document.getElementById('startButton').addEventListener('click', startGame);
+
+    // show ranking on load
+    const initialRanking = JSON.parse(localStorage.getItem('ranking') || '[]');
+    showRanking(initialRanking);
+
+    function draw() {
+      ctx.clearRect(0, 0, width, height);
+
+      const angle = Math.atan2(mousePos.y - origin.y, mousePos.x - origin.x);
+      ctx.fillStyle = '#8B4513';
+      ctx.beginPath();
+      ctx.arc(origin.x, origin.y, 20, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      const handX = origin.x + Math.cos(angle) * 40;
+      const handY = origin.y + Math.sin(angle) * 40;
+      ctx.lineTo(handX, handY);
+      ctx.stroke();
+
+      // disegna pietre come forchette orientate alla direzione di lancio
+      stones.forEach(s => {
+        const angle = Math.atan2(s.vy, s.vx);
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        // l’immagine punta verso l’alto, aggiungi 90° (π/2) per allinearla alla direzione di lancio
+        ctx.rotate(angle + Math.PI / 2);
+        ctx.drawImage(forkImage, -forkImage.width / 2, -forkImage.height / 2);
+        ctx.restore();
+      });
+
+
+
+      // disegna pesci orientati secondo la direzione di nuoto (aggiungi 90° poiché l'immagine punta verso l'alto)
+      fishes.forEach(fish => {
+        const angle = Math.atan2(fish.vy, fish.vx);
+        ctx.save();
+        ctx.translate(fish.x, fish.y);
+        ctx.rotate(angle + Math.PI / 2);
+        ctx.drawImage(fish.image, -fish.radius, -fish.radius);
+        ctx.restore();
+      });
+
+      // draw floating score texts
+      ctx.fillStyle = 'yellow';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      floatingTexts.forEach(ft => {
+        ctx.font = (ft.size || 24) + 'px sans-serif';
+        ctx.fillText(ft.text, ft.x, ft.y);
+      });
+
+      // draw level text at center
+      if (levelText && Date.now() - levelTextTime < levelTextDuration) {
+        ctx.fillStyle = 'lightblue';
+        ctx.font = '48px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(levelText, width / 2, height / 2);
+      }
+    }
+
+    let last = performance.now();
+    function loop(ts) {
+      const dt = (ts - last) / 1000;
+      update(dt);
+      draw();
+      last = ts;
+      if (!gameOver) requestAnimationFrame(loop);
+    }
+  </script>
+</body>
+</html>
